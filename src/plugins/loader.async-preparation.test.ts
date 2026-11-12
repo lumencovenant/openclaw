@@ -226,6 +226,15 @@ it("bounds source acquisition and waits before publishing registrations in order
       ...more.map(({ id }) => [id, "loaded"]),
     ]);
     expect(registry.diagnostics.filter(({ level }) => level === "error")).toEqual([]);
+    const stages = Object.fromEntries(
+      detail.mock.calls.find(([name]) => name === "plugins.gateway-load.stages")![1],
+    );
+    expect(stages.scanMs).toBeGreaterThanOrEqual(0);
+    expect(stages.manifestMs).toBeGreaterThanOrEqual(0);
+    expect(stages.loopMs).toBeGreaterThan(0);
+    expect(stages.importMs).toBeGreaterThan(0);
+    expect(stages.fingerprintMs).toBeGreaterThanOrEqual(0);
+    expect(stages.candidateCount).toBeGreaterThan(0);
     for (const id of ["first-external", "second-external"]) {
       const metrics = Object.fromEntries(
         detail.mock.calls.find(([name]) => name === `plugins.gateway-load.plugin.${id}`)![1],

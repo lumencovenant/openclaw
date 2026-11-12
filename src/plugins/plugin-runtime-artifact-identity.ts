@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getStandaloneRuntimeBuild, isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
@@ -9,6 +10,7 @@ import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { FsSafeError, walkDirectorySync } from "../infra/fs-safe.js";
 import type { OpenClawPackageBuild } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
@@ -136,9 +138,22 @@ function hashRuntimeArtifactFile(params: {
  * Hashes plugin-owned files only. Dependency stores and VCS metadata are
  * separate runtime owners; plugin installs/updates must replace this digest.
  */
+/** Adds scoped host timing without changing identity semantics. */
 export function fingerprintPluginRuntimeArtifact(
   record: PluginRuntimeArtifactIdentitySource,
 ): string {
+  const startedAt = performance.now();
+  try {
+    return fingerprintPluginRuntimeArtifactCore(record);
+  } finally {
+    const metrics = getPluginGenerationMetrics();
+    if (metrics) {
+      metrics.fingerprintMs += performance.now() - startedAt;
+    }
+  }
+}
+
+function fingerprintPluginRuntimeArtifactCore(record: PluginRuntimeArtifactIdentitySource): string {
   const runtimeArtifact = record.source
     ? resolvePluginRuntimeArtifact({
         pluginId: record.pluginId,

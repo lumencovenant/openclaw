@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -20,6 +19,7 @@ import {
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadSetupRuntimeChannelCandidate } from "./loader-channel-runtime.js";
+import { resolveCliMetadataEntrySource } from "./loader-cli-metadata.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import {
   formatBundledChannelWrongLoaderError,
@@ -54,6 +54,7 @@ import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
+import type { PluginLoadStageMetrics } from "./plugin-load-stage-metrics.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
@@ -96,6 +97,7 @@ export function* loadRuntimePluginCandidate(params: {
   logger: PluginLogger;
   state: PluginLoadLoopState;
   preparedConfig: PreparedPluginConfig;
+  stageMetrics: PluginLoadStageMetrics;
 }): Generator<(() => Promise<void>) | undefined, void> {
   // Undefined steps serialize publication and policy that depends on earlier registrations;
   // preparation functions may run ahead without evaluating plugin code.
@@ -708,6 +710,13 @@ export function* loadRuntimePluginCandidate(params: {
     const elapsed = performance.now() - beforeModuleLoad;
     const registerMs =
       beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
+    // Stage sums overlap when source preparation runs ahead; they are diagnostic,
+    // never an additive wall-clock budget.
+    params.stageMetrics.configMs += configValidationMs;
+    params.stageMetrics.artifactMs += artifactPreparationMs;
+    params.stageMetrics.importMs += moduleLoadMs || elapsed;
+    params.stageMetrics.prepareMs += modulePreparationMs;
+    params.stageMetrics.bindMs += registerMs ?? 0;
     detailPluginStartupTrace(params.options.startupTrace, record.id, [
       ["configValidationMs", configValidationMs],
       ["artifactPreparationMs", artifactPreparationMs],
@@ -723,16 +732,4 @@ export function* loadRuntimePluginCandidate(params: {
           ] as const)),
     ]);
   }
-}
-
-function resolveCliMetadataEntrySource(rootDir: string, source: string): string | null {
-  for (const directory of new Set([rootDir, path.dirname(source)])) {
-    for (const extension of [".ts", ".js", ".mjs", ".cjs"]) {
-      const candidate = path.join(directory, `cli-metadata${extension}`);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
 }

@@ -18,6 +18,8 @@ export type PluginGenerationMetrics = {
   workerMs: number;
   /** Host-observed round-trip duration; overlaps workerMs, not host CPU time. */
   hostMs: number;
+  /** Host time spent computing runtime artifact identities during a scoped load. */
+  fingerprintMs: number;
 };
 
 const preparationMetrics = new AsyncLocalStorage<PluginGenerationMetrics>();
@@ -36,6 +38,7 @@ export function createPluginGenerationMetrics(): PluginGenerationMetrics {
     hashReadBytes: 0,
     workerMs: 0,
     hostMs: 0,
+    fingerprintMs: 0,
   };
 }
 

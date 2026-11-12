@@ -8,8 +8,8 @@ import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { isCachedPluginRegistryLoad } from "./loader-cache.js";
+import { loadPluginDiscoveryStage } from "./loader-discovery-stage.js";
 import {
   resolvePluginLoadCacheContext,
   resolveRuntimeSubagentMode,
@@ -41,18 +41,16 @@ import {
   activatePluginRegistry,
   prepareRuntimePluginConfig,
   type PreparedPluginConfig,
-  createPluginCandidatesFromManifestRegistry,
   matchesScopedPluginOrDreamingSidecar,
   maybeThrowOnPluginLoadError,
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import {
-  loadPluginManifestRegistryCore,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
+import { createPluginLoadStageMetrics } from "./plugin-load-stage-metrics.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import {
@@ -323,32 +321,10 @@ export function* loadOpenClawPluginsSteps(
     const { registry } = builder;
     inspectionResources?.attach(registry);
     // The load context has verified the current generation's workspace, config, and scope.
-    const suppliedManifestRegistry =
-      options.manifestRegistry ??
-      (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
-    const discovery: PluginDiscoveryResult = suppliedManifestRegistry
-      ? {
-          candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
-          diagnostics: [],
-        }
-      : (options.discovery ??
-        discoverOpenClawPlugins({
-          workspaceDir: options.workspaceDir,
-          extraPaths: context.normalized.loadPaths,
-          env: context.env,
-          installRecords: context.installRecords,
-        }));
-    const manifestRegistry =
-      suppliedManifestRegistry ??
-      loadPluginManifestRegistryCore({
-        config: context.cfg,
-        workspaceDir: options.workspaceDir,
-        env: context.env,
-        candidates: discovery.candidates,
-        diagnostics: discovery.diagnostics,
-        installRecords:
-          Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
-      });
+    const { discovery, manifestRegistry, scanMs, manifestMs } = loadPluginDiscoveryStage({
+      options,
+      context,
+    });
     const selectedContextEngine = context.selectContextEngineOwner(manifestRegistry.plugins);
     registry.diagnostics.push(...manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
@@ -587,6 +563,7 @@ export function* loadOpenClawPluginsSteps(
       pluginLoadAttemptCount: 0,
     };
     const pluginLoadStartMs = performance.now();
+    const stageMetrics = createPluginLoadStageMetrics();
     const runCandidate = <T>(run: () => T): T =>
       options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
     const preparing: PendingPluginPreparation[] = [];
@@ -628,6 +605,7 @@ export function* loadOpenClawPluginsSteps(
         pendingStateMigration: pendingStateMigrations.get(
           normalizePluginPolicyId(manifestRecord.id),
         ),
+        stageMetrics,
       });
       const candidateStep = runCandidate(() => candidateSteps.next());
       if (!candidateStep.done && candidateStep.value) {
@@ -653,6 +631,20 @@ export function* loadOpenClawPluginsSteps(
     }
     yield* finishPluginPreparations(preparing, runCandidate);
     const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;
+    const generationMetrics = getPluginGenerationMetrics();
+    options.startupTrace?.detail("plugins.gateway-load.stages", [
+      ["scanMs", scanMs],
+      ["manifestMs", manifestMs],
+      ["loopMs", pluginLoadElapsedMs],
+      ["artifactMs", stageMetrics.artifactMs],
+      ["configMs", stageMetrics.configMs],
+      ["importMs", stageMetrics.importMs],
+      ["prepareMs", stageMetrics.prepareMs],
+      ["bindMs", stageMetrics.bindMs],
+      ["fingerprintMs", generationMetrics?.fingerprintMs ?? 0],
+      ["candidateCount", discovery.candidates.length],
+      ["manifestPluginCount", manifestRegistry.plugins.length],
+    ]);
     if (state.pluginLoadAttemptCount > 0) {
       logger.debug?.(
         `[plugins] loaded ${registry.plugins.length} plugin(s) (${state.pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,

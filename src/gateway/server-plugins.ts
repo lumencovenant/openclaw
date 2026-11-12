@@ -13,6 +13,10 @@ import type {
   PluginRuntimeRecovery,
 } from "../plugins/loader-types.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "../plugins/plugin-generation-metrics.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -461,35 +465,38 @@ export async function loadGatewayPlugins(params: {
       )
     : undefined;
   let pluginRegistry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>>;
+  const generationMetrics = createPluginGenerationMetrics();
   try {
     pluginRegistry = gatewayRuntimeBindings
-      ? await loadOpenClawPluginsAsync({
-          ...buildPluginRuntimeLoadOptions(loadContext),
-          activate: false,
-          runtimeSideEffects: true,
-          cache: false,
-          throwOnLoadError: params.loadIntent === "replacement",
-          previousRegistry: params.previousRegistry,
-          replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
-          bundledCodeReloadPluginIds: resolveBundledCodeReloadPluginIds(params.pluginLifecycle),
-          loadModules: params.loadModules,
-          moduleRecoveries: params.moduleRecoveries,
-          prepareRegistrationFailureCleanup: params.prepareRegistrationFailureCleanup,
-          // Startup registration stays scoped; later capability loads use the complete bound generation.
-          manifestRegistry:
-            params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,
-          allowProcessHomeSessionCatalogs,
-          onlyPluginIds: pluginIds,
-          coreGatewayHandlers: params.coreGatewayHandlers,
-          coreGatewayMethodNames: params.coreGatewayMethodNames,
-          hostServices: params.hostServices,
-          runtimeOptions: {
-            allowGatewaySubagentBinding: true,
-            ...gatewayRuntimeBindings.runtime,
-          },
-          channelPluginLoadIntent: params.channelPluginLoadIntent,
-          startupTrace: params.startupTrace,
-        })
+      ? await withPluginGenerationMetrics(generationMetrics, () =>
+          loadOpenClawPluginsAsync({
+            ...buildPluginRuntimeLoadOptions(loadContext),
+            activate: false,
+            runtimeSideEffects: true,
+            cache: false,
+            throwOnLoadError: params.loadIntent === "replacement",
+            previousRegistry: params.previousRegistry,
+            replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
+            bundledCodeReloadPluginIds: resolveBundledCodeReloadPluginIds(params.pluginLifecycle),
+            loadModules: params.loadModules,
+            moduleRecoveries: params.moduleRecoveries,
+            prepareRegistrationFailureCleanup: params.prepareRegistrationFailureCleanup,
+            // Startup registration stays scoped; later capability loads use the complete bound generation.
+            manifestRegistry:
+              params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,
+            allowProcessHomeSessionCatalogs,
+            onlyPluginIds: pluginIds,
+            coreGatewayHandlers: params.coreGatewayHandlers,
+            coreGatewayMethodNames: params.coreGatewayMethodNames,
+            hostServices: params.hostServices,
+            runtimeOptions: {
+              allowGatewaySubagentBinding: true,
+              ...gatewayRuntimeBindings.runtime,
+            },
+            channelPluginLoadIntent: params.channelPluginLoadIntent,
+            startupTrace: params.startupTrace,
+          }),
+        )
       : createEmptyPluginRegistry();
     setPluginRuntimeLoadContext(pluginRegistry, loadContext);
   } catch (error) {
@@ -503,6 +510,7 @@ export async function loadGatewayPlugins(params: {
   params.startupTrace?.detail("plugins.gateway-load", [
     ["pluginIdsMs", pluginIdsMs],
     ["loadMs", loadMs],
+    ["fingerprintMs", generationMetrics.fingerprintMs],
     ["pluginIds", String(pluginIds.length)],
     ["pluginCount", pluginIds.length],
     ["gatewayHandlers", String(pluginMethods.length)],
