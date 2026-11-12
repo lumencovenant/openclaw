@@ -15,6 +15,7 @@ param(
   [int]$Port = 18999,
   [int]$TimeoutSec = 120,
   [string]$Out = ".artifacts/bench/startup.json",
+  [string]$ConfigPath = "",
   [switch]$KeepState
 )
 
@@ -30,7 +31,9 @@ New-Item -ItemType Directory -Path $benchRoot -Force | Out-Null
 
 $env:OPENCLAW_STATE_DIR = $stateDir
 $env:OPENCLAW_CONFIG_PATH = Join-Path $stateDir "openclaw.json"
-if (-not (Test-Path -LiteralPath $env:OPENCLAW_CONFIG_PATH)) {
+if ($ConfigPath) {
+  Copy-Item -LiteralPath $ConfigPath -Destination $env:OPENCLAW_CONFIG_PATH -Force
+} elseif (-not (Test-Path -LiteralPath $env:OPENCLAW_CONFIG_PATH)) {
   @{ gateway = @{ mode = "local"; port = $Port } } |
     ConvertTo-Json -Depth 6 |
     Set-Content -LiteralPath $env:OPENCLAW_CONFIG_PATH -Encoding UTF8
